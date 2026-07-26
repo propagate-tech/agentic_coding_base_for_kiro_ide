@@ -212,6 +212,7 @@ app/
 │   └── lib/              # 共通ユーティリティ
 ├── tests/                # Vitest テスト
 │   └── integration/      # Hono app.request() による結合テスト
+├── .npmrc                # npm キャッシュ設定（cache=../runtime/npm-cache）
 └── package.json
 ```
 

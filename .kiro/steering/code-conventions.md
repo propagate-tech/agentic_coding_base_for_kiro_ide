@@ -125,6 +125,7 @@ Biome の `organizeImports` に任せる。手動で書く場合は以下の順:
 ├── public/                 # 静的ファイル（CSS, 画像など）
 ├── specs/                  # 仕様書（AGENTS.md 参照）
 │   └── archive/
+├── .npmrc                  # npm キャッシュをワークスペース内に閉じ込める設定（AGENTS.md 参照）
 ├── biome.json
 ├── package.json
 ├── tsconfig.json

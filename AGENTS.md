@@ -44,11 +44,26 @@ $env:Path = "$PWD\..\runtime\node;$env:Path"; npm test
 
 ワークスペース直下で実行する場合は `../runtime` を `runtime` に読み替える。
 
+### npm キャッシュもリポジトリ内に閉じ込める（重要）
+
+npm のキャッシュは既定では受講者PCのホームディレクトリ（macOS: `~/.npm`、Windows: `%LocalAppData%\npm-cache`）に書き込まれてしまう。受講者PCに痕跡を残さないため、**キャッシュもワークスペース内（`runtime/npm-cache/`）に閉じ込める**。
+
+- `app/` を初期化する際（最初の `npm install` より**前**）に、`app/.npmrc` を次の内容で作成する:
+
+  ```
+  cache=../runtime/npm-cache
+  ```
+
+- npm コマンドは必ず `app/` 内で実行する前提（上記「実行方法」参照）のため、この相対パスはワークスペース直下の `runtime/npm-cache/` に解決される
+- `npx` の実行キャッシュ（`_npx`）やログ（`_logs`）も同キャッシュ配下に収まる
+- `runtime/` は Git 追跡外のため、キャッシュがリポジトリの配布物に混入することもない
+
 ### 補足
 
 - `npm run` / `npx` から起動される `tsx` / `vitest` / `biome` などは、**runtime の npm を経由すれば自動的に runtime の node を使う**（子プロセスに npm が自分の node ディレクトリを渡すため）。個別に node を指定する必要はない。
 - したがって、各スキルのチェックリストにある `npm test` / `npm run dev` / `npx biome ...` などは、上記の「PATH 付与つき」で実行すれば読み替えられる。
 - パッケージマネージャの読み替え指示（グローバル設定等）がある場合も、対象バイナリは必ず runtime 配下のものを使う。
+- `npm install -g` は使わない（ポータブル版の prefix は `runtime/node` 配下を指すためリポジトリ内には収まるが、本ハンズオンでグローバルインストールが必要になる場面はない）。
 
 ## ネットワーク要件（セットアップ時・実行時）
 

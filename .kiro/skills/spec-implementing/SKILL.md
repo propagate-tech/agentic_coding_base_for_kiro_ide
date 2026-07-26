@@ -178,7 +178,11 @@ Phase 4: 最終チェック（Biome / カバレッジ / DoD 確認）
 
 `app/package.json` が存在するか確認。無ければ初期化、あれば不足を追加する形で進める。
 
-1. `app/` 配下に `package.json` / `tsconfig.json` / `biome.json` / `vitest.config.ts` を整える
+1. `app/` 配下に `package.json` / `tsconfig.json` / `biome.json` / `vitest.config.ts` を整える。あわせて **`app/.npmrc` を必ず作成**する（npm キャッシュをワークスペース内に閉じ込めるため。最初の `npm install` より前に置くこと。詳細は [AGENTS.md](../../../AGENTS.md) の「npm キャッシュもリポジトリ内に閉じ込める」）:
+
+   ```
+   cache=../runtime/npm-cache
+   ```
 2. 必要な依存（すべて MIT / Apache-2.0 / BSD のものに限る）:
    - 本体: `hono`
    - ランタイム検証: `zod`, `@hono/zod-validator`
