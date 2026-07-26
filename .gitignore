@@ -1,0 +1,18 @@
+node_modules/
+coverage/
+
+# 受講者PCで展開した Node.js ポータブル版（OS/アーキ別バイナリのため追跡しない）
+runtime/
+
+# dist/ には配布用の Node.js ポータブル版アーカイブ（.tar.gz / .zip）を同梱するため追跡する
+
+.env
+.env.*
+
+# 受講者の作業領域（app/ はハンズオン中に受講者が新規作成する。git/zip での履歴管理・持ち帰りは行わない）
+app/*
+
+# OS / IDE
+.DS_Store
+.vscode/
+.idea/
