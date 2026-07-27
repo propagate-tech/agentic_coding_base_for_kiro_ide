@@ -1,0 +1,99 @@
+{
+  // Kiro Agent のターミナルコマンド許可設定
+  // https://kiro.dev/docs/chat/terminal/
+  //
+  // - trustedCommands: 前方一致（prefix matching）。`*` は以降の任意文字列にマッチする。
+  //   マッチしなかった場合は「実行前に承認を求められる」だけなので安全側に倒れる。
+  // - commandDenylist: 部分一致（substring matching）。trustedCommands より優先して評価され、
+  //   マッチしたコマンドは信頼設定に関わらず手動承認が必要になる。
+
+  "kiroAgent.trustedCommands": [
+    // --- 同梱 Node ランタイムを PATH 付与で実行する定型（AGENTS.md「実行環境」準拠） ---
+    // 前方一致のため、`npm test` ではなく実際に発行される文字列の先頭から書く必要がある
+    "PATH=\"$PWD/../runtime/node/bin:$PATH\" *",
+    "PATH=\"$PWD/runtime/node/bin:$PATH\" *",
+    "cd app && PATH=\"$PWD/../runtime/node/bin:$PATH\" *",
+    "$env:Path = \"$PWD\\..\\runtime\\node;$env:Path\"; *",
+    "$env:Path = \"$PWD\\runtime\\node;$env:Path\"; *",
+    "cd app; $env:Path = \"$PWD\\..\\runtime\\node;$env:Path\"; *",
+
+    // --- 同梱 Node のバイナリ直叩き ---
+    "runtime/node/bin/node *",
+    "runtime/node/bin/npm *",
+    "runtime/node/bin/npx *",
+    "runtime\\node\\node.exe *",
+    "runtime\\node\\npm.cmd *",
+    "runtime\\node\\npx.cmd *",
+
+    // --- npm / npx（PATH 付与なしで直接呼ばれた場合の保険） ---
+    "npm install",
+    "npm install *",
+    "npm run *",
+    "npm test",
+    "npm test *",
+    "npx vitest *",
+    "npx biome *",
+    "npx tsx *",
+
+    // --- npm / npx（Windows。裸の npm は npm.ps1 に解決されるため .cmd を使う） ---
+    "npm.cmd install",
+    "npm.cmd install *",
+    "npm.cmd run *",
+    "npm.cmd test",
+    "npm.cmd test *",
+    "npx.cmd vitest *",
+    "npx.cmd biome *",
+    "npx.cmd tsx *",
+
+    // --- 読み取り・状態確認（macOS / Linux） ---
+    "ls",
+    "ls *",
+    "cat *",
+    "head *",
+    "tail *",
+    "grep *",
+    "pwd",
+    "echo *",
+    "which *",
+    "lsof *",
+    "ss *",
+    "netstat *",
+    "timeout *",
+
+    // --- 読み取り・状態確認（Windows / PowerShell） ---
+    "Get-Content *",
+    "Get-ChildItem *",
+    "Get-Command *",
+    "Get-NetTCPConnection *",
+    "Select-String *",
+    "Test-Path *",
+    "findstr *",
+
+    // --- setup skill（同梱ポータブル Node の展開）---
+    "tar *",
+    "unzip *",
+    "zip *",
+    "mkdir *",
+    "mv *",
+    "Expand-Archive *",
+    "New-Item *",
+    "Rename-Item *",
+    "Move-Item *"
+  ],
+
+  // 破壊的操作は trustedCommands にマッチしても必ず手動承認させる。
+  // 部分一致のため、PowerShell コマンドレットは小文字表記も併記している
+  // （大文字小文字の扱いが公式ドキュメントに明記されていないため安全側に倒す）。
+  "kiroAgent.commandDenylist": [
+    "rm ",
+    "Remove-Item",
+    "remove-item",
+    "kill",
+    "taskkill",
+    "Stop-Process",
+    "stop-process",
+    "sudo",
+    "chmod 777",
+    "curl | sh"
+  ]
+}
