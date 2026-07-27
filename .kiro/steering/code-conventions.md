@@ -48,11 +48,15 @@ fileMatchPattern: ["app/**/*"]
 ## 2. コーディングスタイル
 
 ### 2.1 Formatter / Linter
-- **Biome** を採用する（`@biomejs/biome`）。
+- **Biome** を採用する（`@biomejs/biome`）。**インストールはメジャーを固定して `@biomejs/biome@^2` で行う**（下記テンプレートは v2 系の設定形式。バージョンが揃っていないと設定パースエラーになる）。
 - 設定ファイル: `app/biome.json`
-- `npm run test` 前に必ず `npx biome check --write .` を実行。
-  - `npm` / `npx` は **runtime 配下**（`runtime/node/bin`、Windows は `runtime\node`）のものを使い、実行時に PATH へ runtime の bin を付与する（詳細は `AGENTS.md`「実行環境（Node.js / npm / npx）」）。
-- 推奨設定:
+- **実行は必ず `package.json` の script 経由**にする。`package.json` に次を定義し、`npm run test` 前に必ず `npm run lint` を実行する:
+  ```json
+  { "scripts": { "lint": "biome check --write ." } }
+  ```
+  - **`npx biome ...` は使わない。** `npx` はローカルに目的のパッケージを見つけられないと判断するとレジストリから**別バージョンを取得して実行**してしまい、設定形式の不一致（後述の v1 / v2 差分）を再発させる。script 経由なら `node_modules/.bin` の固定バージョンだけが走る。
+  - `npm` は **runtime 配下**（`runtime/node/bin`、Windows は `runtime\node`）のものを使い、実行時に PATH へ runtime の bin を付与する（詳細は `AGENTS.md`「実行環境（Node.js / npm / npx）」）。Windows では `npm.cmd run lint` と `.cmd` を明示する（裸だと `npm.ps1` に解決され ExecutionPolicy で失敗する）。
+- 推奨設定（**Biome v2.x 前提**）:
   ```json
   {
     "formatter": { "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
@@ -64,13 +68,21 @@ fileMatchPattern: ["app/**/*"]
       }
     },
     "linter": {
+      "enabled": true,
       "rules": {
-        "recommended": true,
         "style": { "noNonNullAssertion": "error" }
       }
     }
   }
   ```
+- **biome.json に書いてはいけないキー（v2）**:
+  - `$schema` — バージョン固定 URL になりメンテ負債。省略しても動作に影響しない
+  - `organizeImports`（トップレベル） — v2 で**削除済み**。書くと `Found an unknown key 'organizeImports'` で設定のパースに失敗し、`biome check` が即エラー終了する（import 整理は §2.3 のとおり既定で有効）
+  - `linter.rules.recommended` — v2 では既定で有効。明示すると deprecated 警告が出る
+
+  > v1.x を使わざるを得ない場合のみ、`organizeImports: { enabled: true }` をトップレベルに、`linter.rules` に `"recommended": true` を追加する。**ただし本ハンズオンでは v2 固定（`@^2`）を前提とする。**
+
+- **実行結果の判定**: Biome はエラーが無いとき stdout にほぼ何も出さない。**空出力は成功**であって失敗ではない。設定形式の誤りは必ず stderr にメッセージ（`Found an unknown key ...` 等）が出る。空出力を失敗と誤認して実行方法を次々変えないこと。設定形式のエラーが出た場合は上記「書いてはいけないキー」に沿って手で直すか、`npm exec --no -- biome migrate` を試す（`--no` はローカルに無いときレジストリから取得せず失敗させるフラグ。意図しない別バージョンの実行を防ぐ）。
 
 ### 2.2 命名規則
 
@@ -84,7 +96,7 @@ fileMatchPattern: ["app/**/*"]
 | Zod スキーマ | `xxxSchema` 接尾辞 | `userSchema` |
 
 ### 2.3 import 順序
-Biome の `organizeImports` に任せる。手動で書く場合は以下の順:
+Biome の import 整理に任せる（v2 では `assist.actions.source.organizeImports` が担当。**既定で有効なので biome.json への設定記述は不要**。§2.1 のとおりトップレベルの `organizeImports` は書かない）。手動で書く場合は以下の順:
 1. Node.js 標準モジュール (`node:fs` 等)
 2. 外部パッケージ (`hono`, `zod` 等)
 3. 内部エイリアス (`@/...`)

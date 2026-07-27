@@ -182,7 +182,8 @@ scope.md の「In Scope」から転記:
 - **クライアント JS**: <無し / vanilla JS / htmx>
 - **テスト**: Vitest（単体 + Hono `app.request()` による結合テスト）
 - **実行**: Node.js + tsx
-- **パッケージマネージャ**: npm（コマンドは `npm` / `npx` を標準とする）
+- **Formatter / Linter**: Biome v2 系（`@biomejs/biome@^2` でメジャー固定して導入）
+- **パッケージマネージャ**: npm（**ローカルツールは `package.json` の script 経由で呼ぶ。`npx` は使わない**）
 
 > Hono 単体構成のため、React / Next.js などフロントエンドフレームワークは導入しません。
 > スタイリングは Tailwind CSS の CDN 版を使うのでビルド工程は不要です（外部 CDN 利用は個人の自己責任の範疇）。
@@ -549,13 +550,13 @@ npm run dev
 # → http://localhost:3000 を開く
 ```
 
-> **本ハンズオンでの実行時の注意**: `node` / `npm` はグローバルには無く、`runtime/node` 配下のものを使う。実際に実行する際は PATH に runtime の bin を付与する（例: `app/` 配下で `PATH="$PWD/../runtime/node/bin:$PATH" npm install` / Windows は `$env:Path = "$PWD\..\runtime\node;$env:Path"; npm install`）。詳細は [AGENTS.md](../../../AGENTS.md) の「実行環境（Node.js / npm / npx）」を参照。上記スニペットは README 用の簡潔版。
+> **本ハンズオンでの実行時の注意**: `node` / `npm` はグローバルには無く、`runtime/node` 配下のものを使う。実際に実行する際は PATH に runtime の bin を付与する（例: `app/` 配下で `PATH="$PWD/../runtime/node/bin:$PATH" npm install` / Windows は `$env:Path = "$PWD\..\runtime\node;$env:Path"; npm.cmd install`）。**Windows では `npm` / `npx` を裸で書かず必ず `npm.cmd` / `npx.cmd` とする**（裸だと PowerShell が `npm.ps1` を選び ExecutionPolicy で失敗する）。詳細は [AGENTS.md](../../../AGENTS.md) の「実行環境（Node.js / npm / npx）」および「Windows では必ず `.cmd` を明示する」を参照。上記スニペットは README 用の簡潔版。
 
 ## 6. README に書く内容
 - [ ] プロダクトの概要（1〜2 行）
 - [ ] 起動手順（上記のコピー）
 - [ ] 利用している外部データ / API と「個人の自己責任で利用する」旨
-- [ ] 開発コマンド一覧（dev / test / coverage）
+- [ ] 開発コマンド一覧（dev / test / test:coverage / lint）
 
 ## 7. 最終チェックリスト（Definition of Done）
 - [ ] `npm test` 全件成功（単体 + 結合テスト）/ カバレッジ 10% 以上

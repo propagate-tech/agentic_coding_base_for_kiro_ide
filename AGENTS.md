@@ -38,11 +38,31 @@ PATH="$PWD/../runtime/node/bin:$PATH" npm test
 ```
 
 ```powershell
-# Windows / PowerShell
-$env:Path = "$PWD\..\runtime\node;$env:Path"; npm test
+# Windows / PowerShell（npm ではなく npm.cmd と書く。理由は下の「Windows では必ず .cmd」参照）
+$env:Path = "$PWD\..\runtime\node;$env:Path"; npm.cmd test
 ```
 
 ワークスペース直下で実行する場合は `../runtime` を `runtime` に読み替える。
+
+### Windows では必ず `.cmd` を明示する（重要）
+
+**Windows / PowerShell では `npm` / `npx` と裸で書いてはならない。必ず `npm.cmd` / `npx.cmd` と書く。**
+
+理由:
+
+- Windows 版 Node には npm のランチャが3つ同梱されている（`npm`＝sh 用 / `npm.cmd`＝cmd.exe 用 / `npm.ps1`＝PowerShell 用）
+- PowerShell はコマンド解決時、自身のスクリプト拡張子 `.ps1` を `PATHEXT`（`.COM;.EXE;.BAT;.CMD;…`）より**優先**するため、`npm` は `npm.ps1` に解決される
+- `.ps1` は実行ポリシー（ExecutionPolicy）の管理対象。Windows クライアントの既定は `Restricted`（社内配布PCでは GPO で固定されていることも多い）なので読み込みが拒否され、次のエラーで失敗する:
+
+  ```
+  このシステムではスクリプトの実行が無効になっているため、ファイル ...\npm.ps1 を読み込むことができません。
+  ```
+
+- ExecutionPolicy が規制するのは `.ps1` / `.psm1` / `.ps1xml` **のみ**。`.cmd` は cmd.exe が解釈するバッチなので対象外 → `npm.cmd` は必ず動く
+
+**受講者PCの ExecutionPolicy を変更して回避しない**（`Set-ExecutionPolicy` を実行しない）。受講者の環境を変えてしまううえ、GPO 固定環境では変更自体が失敗する。`.cmd` を明示するだけで解決する。
+
+なお `node` は `node.exe` なのでこの問題は起きない（`runtime\node\node.exe` をそのまま呼べる）。
 
 ### npm キャッシュもリポジトリ内に閉じ込める（重要）
 
@@ -60,8 +80,9 @@ npm のキャッシュは既定では受講者PCのホームディレクトリ�
 
 ### 補足
 
-- `npm run` / `npx` から起動される `tsx` / `vitest` / `biome` などは、**runtime の npm を経由すれば自動的に runtime の node を使う**（子プロセスに npm が自分の node ディレクトリを渡すため）。個別に node を指定する必要はない。
-- したがって、各スキルのチェックリストにある `npm test` / `npm run dev` / `npx biome ...` などは、上記の「PATH 付与つき」で実行すれば読み替えられる。
+- **PATH 付与は省略できない。** `npm.cmd` / `runtime/node/bin/npm` 自体は自分の隣にある node を使うが、`npm run dev` から起動される `node_modules/.bin/tsx` などの shim は**裸の `node` を呼ぶ**（npm が子プロセスへ渡す PATH には `node_modules/.bin` 系しか追加されず、node 自身のディレクトリは含まれない）。runtime の bin を PATH 先頭に付与しているから `tsx` / `vitest` / `biome` が runtime の node で動く。
+- したがって、各スキルのチェックリストにある `npm test` / `npm run dev` / `npm run lint` などは、上記の「PATH 付与つき」（Windows は加えて `.cmd` 明示）で実行すれば読み替えられる。
+- **ローカルツール（biome / vitest / tsx）は `npx` で呼ばず、`package.json` の script 経由（`npm run <script>`）で呼ぶ。** `npx` はローカルに目的のパッケージを見つけられないと判断すると**レジストリから別バージョンを取得して実行**するため、設定形式の不一致（例: Biome v1 形式の biome.json に v2 が当たる／その逆）を引き起こす。ネットワークアクセスも増える。どうしても直接実行が必要な場合は `npm exec --no -- <cmd>` を使う（`--no` = 未検出時にダウンロードせず失敗させる）。
 - パッケージマネージャの読み替え指示（グローバル設定等）がある場合も、対象バイナリは必ず runtime 配下のものを使う。
 - `npm install -g` は使わない（ポータブル版の prefix は `runtime/node` 配下を指すためリポジトリ内には収まるが、本ハンズオンでグローバルインストールが必要になる場面はない）。
 

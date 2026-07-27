@@ -59,18 +59,22 @@ skill 起動時、対象 feature の指定は以下のいずれかで受け取�
 - 特に以下を厳守:
   - **TypeScript strict**（`any` 禁止、Non-null assertion 禁止、`@ts-ignore` 禁止）
   - **型ファースト**: 外部入力は Zod で検証
-  - **Biome** で format / lint（`npx biome check --write .`）
+  - **Biome** で format / lint（`npm run lint`。`npx biome ...` は使わない。理由は Step 3 参照）
   - **ディレクトリ構成**: `src/index.ts` / `src/routes/` / `src/lib/` / `src/schemas/` / `src/components/` / `src/middleware/` / `src/types/`
   - **テストは `tests/` 配下に `src/` と対応する階層で配置**
   - **`enum` 禁止**: `as const` + Union Type を使う
   - **戻り値型を明示**（export 関数）
 
-> **コマンド実行の前提**: 本スキル内の `npm` / `npx` / `node`（`npm install` / `npm test` / `npm run dev` / `npx biome ...` / `npx vitest ...` など）は、すべて **runtime 配下**（`runtime/node/bin`、Windows は `runtime\node`）のものを使う。グローバルの node/npm は無い前提。実行時は PATH に runtime の bin を付与する。具体的な方法は [AGENTS.md](../../../AGENTS.md) の「実行環境（Node.js / npm / npx）」を参照。以降のコマンドはこの読み替えを前提に記載する。
+> **コマンド実行の前提**: 本スキル内の `npm` / `node`（`npm install` / `npm test` / `npm run dev` / `npm run lint` など）は、すべて **runtime 配下**（`runtime/node/bin`、Windows は `runtime\node`）のものを使う。グローバルの node/npm は無い前提。実行時は PATH に runtime の bin を付与する。具体的な方法は [AGENTS.md](../../../AGENTS.md) の「実行環境（Node.js / npm / npx）」を参照。以降のコマンドはこの読み替えを前提に記載する。
+>
+> **ローカルツール（biome / vitest / tsx）の実行は `npx` ではなく `package.json` の script 経由（`npm run <script>`）で行う。** `npx` はローカルに目的のパッケージを見つけられないと判断するとレジストリから**別バージョンを取得して実行**するため、設定形式の不一致（Biome v1/v2 の差分など）を引き起こす。どうしても直接実行が必要な場合は `npm exec --no -- <cmd>`（`--no` = 未検出時にダウンロードせず失敗させる）を使う。
+>
+> **Windows では `npm` / `npx` と裸で書かず、必ず `npm.cmd` / `npx.cmd` と書く。** PowerShell は `.ps1` を `.cmd` より優先して解決するため `npm.ps1` が選ばれ、ExecutionPolicy（既定 `Restricted`）に阻まれて「このシステムではスクリプトの実行が無効になっているため…`npm.ps1` を読み込むことができません」で失敗する。`.cmd` はポリシー対象外なので確実に動く。**`Set-ExecutionPolicy` で受講者PCのポリシーを変更して回避しない。** 詳細は [AGENTS.md](../../../AGENTS.md) の「Windows では必ず `.cmd` を明示する」を参照。
 
 ### 3. TDD を順守
 - 機能ごとに **テストを先に書く → 失敗を確認 → 実装 → テスト通過** の順
 - 処理変更の都度 `npm test` を実行し、常にグリーンを維持
-- カバレッジ 10% 以上を必達。`npx vitest --run --coverage` で確認
+- カバレッジ 10% 以上を必達。`npm run test:coverage` で確認（script は Step 3 で定義する）
 - 単体テスト完了後、最終チェックとして Hono `app.request()` による結合テストを実施（**主要シナリオ1〜2本に絞る**。ハンズオンの時間内に収めるため。Playwright 等ブラウザ E2E は使わない）
 
 ### 4. ライブラリの追加方針
@@ -187,11 +191,28 @@ Phase 4: 最終チェック（Biome / カバレッジ / DoD 確認）
    - 本体: `hono`
    - ランタイム検証: `zod`, `@hono/zod-validator`
    - データ層: 仕様書の指定に従う（例: `better-sqlite3`、ファイル系なら不要）
-   - 開発: `typescript`, `tsx`, `@biomejs/biome`, `vitest`, `@vitest/coverage-v8`
-3. `tsconfig.json` は code-conventions.md の通り（`strict`, `noUncheckedIndexedAccess`, `noImplicitOverride`, `exactOptionalPropertyTypes`, `target: ES2022`, `module: ESNext`, `moduleResolution: Bundler`, パスエイリアス `@/* → src/*`）
-4. `biome.json` は code-conventions.md のテンプレートに準拠
-5. `.env.example` を作成（中身が必要なら）
-6. `npm install` を実行（runtime の npm を使う。`app/` 配下で実行する例）:
+   - 開発: `typescript`, `tsx`, **`@biomejs/biome@^2`**, `vitest`, `@vitest/coverage-v8`
+
+   > **Biome は必ずメジャーを固定（`@^2`）して入れる。** バージョン指定なしで入れると将来 v3 以降が降ってきて、code-conventions.md の biome.json テンプレート（v2 形式）と食い違い、設定パースエラーで `biome check` が即失敗する。
+3. `package.json` の `scripts` に **最低限この4つ** を定義する（ローカルツールは必ず script 経由で呼ぶ。`npx` は使わない）:
+
+   ```json
+   {
+     "scripts": {
+       "dev": "tsx watch src/index.ts",
+       "test": "vitest --run",
+       "test:coverage": "vitest --run --coverage",
+       "lint": "biome check --write ."
+     }
+   }
+   ```
+4. `tsconfig.json` は code-conventions.md の通り（`strict`, `noUncheckedIndexedAccess`, `noImplicitOverride`, `exactOptionalPropertyTypes`, `target: ES2022`, `module: ESNext`, `moduleResolution: Bundler`, パスエイリアス `@/* → src/*`）
+5. `biome.json` は code-conventions.md のテンプレート（**v2 形式**）に準拠。特に次の3キーは**書かない**:
+   - `$schema` — バージョン固定 URL でメンテ負債になる
+   - `organizeImports`（トップレベル） — v2 で削除済みキー。書くと `Found an unknown key 'organizeImports'` で設定のパースに失敗し `biome check` が即エラー終了する
+   - `linter.rules.recommended` — v2 では既定で有効。明示すると deprecated 警告が出る
+6. `.env.example` を作成（中身が必要なら）
+7. `npm install` を実行（runtime の npm を使う。`app/` 配下で実行する例）:
 
 ```bash
 # macOS / Linux
@@ -199,11 +220,24 @@ cd app && PATH="$PWD/../runtime/node/bin:$PATH" npm install
 ```
 
 ```powershell
-# Windows / PowerShell
-cd app; $env:Path = "$PWD\..\runtime\node;$env:Path"; npm install
+# Windows / PowerShell（npm ではなく npm.cmd。裸の npm は npm.ps1 に解決され ExecutionPolicy で落ちる）
+cd app; $env:Path = "$PWD\..\runtime\node;$env:Path"; npm.cmd install
 ```
 
-> セットアップ後、`npm run dev` のスクリプトと `npm test` の動作確認を 1 度行う（空テストでも良い。いずれも上記と同様に runtime の npm を PATH 付与で実行する）。
+#### Phase 0 の完了条件（4つすべて通るまで Phase 1 に進まない）
+
+セットアップ後、**ツールチェーンが実際に動くこと**を以下の順で確認する。1つでも失敗したら Phase 1 に進まず、原因を解決する（いずれも runtime の npm を PATH 付与で実行。Windows は `npm.cmd ...`）。
+
+| # | 確認 | コマンド | 失敗したときの対処 |
+|---|---|---|---|
+| 1 | Biome が起動する | `npm exec --no -- biome --version` | バージョンが出ない → `@biomejs/biome@^2` が devDependencies に入り `npm install` が完了しているか確認 |
+| 2 | Biome の設定が読める | `npm run lint` | `Found an unknown key ...` 等が出たら biome.json が v1 形式。上記5の3キーを削除する。`npm exec --no -- biome migrate` でも直る場合がある |
+| 3 | テストが走る | `npm test` | 空テスト（`expect(true).toBe(true)` 程度）でも良いので正常終了させる |
+| 4 | dev サーバが起動する | `npm run dev` → 起動確認後すぐ停止 | ポート衝突・`tsx` 未解決などを解消する |
+
+> **Biome の実行結果の読み方（重要）**: Biome はエラーが無いとき stdout にほぼ何も出さない。**空出力は成功**であって失敗ではない。設定形式の誤りは必ず stderr にメッセージが出る。空出力を「失敗したのかも」と解釈して実行方法を次々変えて試さないこと。
+
+> **なぜ先に確認するのか**: Phase 1 以降は「テスト → 実装 → テスト」の TDD サイクルを高速に回す。ツールチェーンが壊れた状態で実装に入ると、失敗がコードの問題かツールの問題か切り分けられなくなり、大きく時間を失う。
 
 ### Step 4: Phase 1 — データモデル（TDD）
 
@@ -215,7 +249,7 @@ cd app; $env:Path = "$PWD\..\runtime\node;$env:Path"; npm install
 4. テスト失敗を確認
 5. 実装を書く（保存先初期化 → list / get → create / update / remove → バリデーション）
 6. テスト通過を確認
-7. `npx biome check --write .` で format / lint
+7. `npm run lint` で format / lint（出力が空なら成功。判定基準は Step 3 の「Biome の実行結果の読み方」参照）
 
 > テストデータは毎テストでリセット可能にする（仕様書 §4 のリセット手段に従う / 一時ファイルや in-memory を活用）。
 
@@ -232,7 +266,7 @@ cd app; $env:Path = "$PWD\..\runtime\node;$env:Path"; npm install
 3. 各エンドポイントに `zValidator` を組み合わせる（リクエスト検証）
 4. `tests/routes/<feature>.test.ts` に Vitest テスト（Hono の `app.request()` でテスト）
 5. 受け入れ基準（Given / When / Then）をテストケース化
-6. テスト通過 → `npx biome check --write .`
+6. テスト通過 → `npm run lint`
 
 > エラーレスポンスは仕様書通りのステータスコード・JSON 形式を厳守。`app.onError()` で 500 系を共通化。
 
@@ -265,9 +299,9 @@ cd app; $env:Path = "$PWD\..\runtime\node;$env:Path"; npm install
 
 ### Step 7: Phase 4 — 最終チェック
 
-1. `npx biome check --write .` を最終実行
+1. `npm run lint` を最終実行（出力が空なら成功）
 2. `npm test` 全件成功を確認（単体テスト + 結合テスト）
-3. `npx vitest --run --coverage` でカバレッジ 10% 以上を確認
+3. `npm run test:coverage` でカバレッジ 10% 以上を確認
 4. **統合系の仕様書**（典型: `04-integration.md`、無い機能では概要系仕様書）の「最終チェックリスト（Definition of Done）」を1項目ずつ確認し、未達があれば対応
 
 ### Step 8: 完成報告とアーカイブ提案
@@ -286,6 +320,22 @@ cd app; $env:Path = "$PWD\..\runtime\node;$env:Path"; npm install
 - 「とりあえず通す」コードを書かない。**原因を診断**してから直す
 - フックや CI を `--no-verify` などで迂回しない
 - 落ち続けるテストがあれば、仕様書のどの受け入れ基準に対応するか再確認し、解釈に迷ったらユーザーに確認
+
+### Biome が動かない / 出力が読めないとき
+
+**まず「出力が空＝成功」を思い出す。** Biome はエラーが無いとき stdout にほぼ何も出さない。空出力を失敗と誤認して、実行方法（`npx` に変える、バイナリを直叩きする等）を次々試すのが最も時間を失うパターン。**エラーがあるときは必ず stderr にメッセージが出る。**
+
+症状別の対処:
+
+| 症状 | 原因 | 対処 |
+|---|---|---|
+| `Found an unknown key 'organizeImports'` 等で即エラー終了 | biome.json が v1 形式のまま（インストール済みは v2） | biome.json から `organizeImports` / `linter.rules.recommended` / `$schema` を削除する。`npm exec --no -- biome migrate` でも直る場合がある |
+| `recommended` に関する deprecated 警告 | v2 では既定で有効なため明示不要 | `linter.rules.recommended` を削除 |
+| コマンド自体が見つからない | `npm install` 未完了、または script 定義漏れ | `package.json` の `scripts.lint` と devDependencies を確認して `npm install` をやり直す |
+| Windows で「スクリプトの実行が無効…`npm.ps1`」 | 裸の `npm` が `npm.ps1` に解決された | `npm.cmd` と書く（[AGENTS.md](../../../AGENTS.md) 参照）。`Set-ExecutionPolicy` は実行しない |
+
+- **exit code だけで判断しない。** ターミナルラッパーの都合で実際の終了コードと表示が食い違うことがある。stderr のメッセージ内容を根拠にする
+- 実行方法を変えて試すのは、上表の原因を潰し切ってからにする
 
 ### 仕様書に書かれていない判断が必要になったとき
 - 既存の仕様書群とコーディング規約から **演繹できる範囲なら自走** する（例: 命名規則・ファイル配置）
@@ -323,6 +373,11 @@ cd app; $env:Path = "$PWD\..\runtime\node;$env:Path"; npm install
 - 結合テスト（Hono `app.request()`）を省略すること（steering のテスト方針と矛盾する）
 - Playwright 等ブラウザ E2E の導入や `npx playwright install` を提案・実行すること（本ハンズオンでは使わない方針）
 - カバレッジ 10% 未満で「完成」とすること
+- **Phase 0 の完了条件（Biome 起動 / Biome 設定パース / テスト実行 / dev 起動）を1つでも満たさないまま Phase 1 に進むこと**
+- **`biome.json` に `$schema` / トップレベル `organizeImports` / `linter.rules.recommended` を書くこと**（v2 では不要、`organizeImports` は設定パースエラーの直接原因）
+- **`@biomejs/biome` をバージョン指定なしで入れること**（必ず `@^2`。テンプレートとメジャーを揃える）
+- **ローカルツールを `npx` で実行すること**（`npx biome` / `npx vitest`。`package.json` の script 経由で呼ぶ。直接実行が必要なら `npm exec --no -- <cmd>`）
+- **Biome の出力が空なのを理由に、実行方法を次々変えて試すこと**（空出力は成功。エラーは必ず stderr に出る）
 - `git init` / `git commit` など git 操作を行うこと（本ハンズオンでは git を使わない方針。受講者PCに git が無い前提で動く）
 - `app/` の zip 化・持ち帰り用アーカイブの作成を提案・実行すること（本ハンズオンでは zip も使わない方針。成果物は `app/` 配下にそのまま残す）
 - 仕様書を実装フェーズで勝手に書き換えること（変更が必要なら必ずユーザー確認の上で仕様書も更新）

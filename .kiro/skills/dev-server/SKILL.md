@@ -54,6 +54,7 @@ description: 「開発サーバ起動して」「サーバ立ち上げて」「�
 - `app/package.json` の `scripts.dev` を実行する（直接 `tsx` 等を呼ばない）
 - `dev` スクリプトが定義されていなければ起動せずに報告して停止
 - **`npm` は runtime 配下のものを使う**（グローバルの node/npm は存在しない前提）。実行時に PATH へ runtime の bin を付与する。詳細は [AGENTS.md](../../../AGENTS.md) の「実行環境（Node.js / npm / npx）」を参照
+- **Windows では `npm` / `npx` と裸で書かず `npm.cmd` / `npx.cmd` と書く**（裸だと `npm.ps1` に解決され ExecutionPolicy で失敗する。[AGENTS.md](../../../AGENTS.md) の「Windows では必ず `.cmd` を明示する」参照）
 
 ### 2. 必ずバックグラウンドで起動する
 
@@ -132,13 +133,15 @@ cd app && PATH="$PWD/../runtime/node/bin:$PATH" npm run dev
 ```
 
 ```powershell
-# Windows / PowerShell
-cd app; $env:Path = "$PWD\..\runtime\node;$env:Path"; npm run dev
+# Windows / PowerShell（npm ではなく npm.cmd。裸の npm は npm.ps1 に解決され ExecutionPolicy で落ちる）
+cd app; $env:Path = "$PWD\..\runtime\node;$env:Path"; npm.cmd run dev
 ```
 
 を `run_in_background: true` で起動。返却された `task_id` と `output` パスを控える。
 
 > グローバルの node/npm は存在しない前提。必ず runtime 配下の npm を PATH 付与で使う（[AGENTS.md](../../../AGENTS.md) 参照）。パッケージマネージャの読み替え指示がある場合も、対象バイナリは runtime 配下のものを用いる。
+>
+> **Windows で `npm run dev` と裸で書くと、PowerShell が `npm.ps1` を選び「このシステムではスクリプトの実行が無効になっているため…`npm.ps1` を読み込むことができません」で起動に失敗する。** 必ず `npm.cmd` と書く（`.cmd` は ExecutionPolicy の対象外）。`Set-ExecutionPolicy` で受講者PCのポリシーを変更して回避しないこと。詳細は [AGENTS.md](../../../AGENTS.md) の「Windows では必ず `.cmd` を明示する」を参照。
 
 #### 1A-3. 起動ログ待機
 

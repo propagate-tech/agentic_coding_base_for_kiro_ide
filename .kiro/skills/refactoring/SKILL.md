@@ -61,7 +61,8 @@ description: 「リファクタリングして」「コードを見直して」�
 - 指摘は **「現状で起きている / 起きそうな具体的な困りごと」** を根拠にする
 
 ### 6. パッケージマネージャ
-- コマンド例は `npm` / `npx` を標準とする
+- コマンド例は `npm` を標準とする（`npm test` / `npm run lint` など）
+- **ローカルツール（biome / vitest）は `npx` で呼ばず `package.json` の script 経由で呼ぶ**（`npx` は未検出時にレジストリから別バージョンを取得して実行してしまう）
 
 ## レビュー観点
 
@@ -136,7 +137,7 @@ description: 「リファクタリングして」「コードを見直して」�
 3. 関連する既存テストの有無を `Bash` (`ls` / `find`) で確認
 4. 必要なら `Agent` (subagent_type=Explore) で広めに関連箇所を探索
 5. **テストの現状確認**（任意・推奨）: ユーザーに確認を取ってから `npm test` を実行し、現状の緑/赤を把握
-   - `npm` はグローバルではなく **runtime 配下**（`runtime/node/bin`、Windows は `runtime\node`）のものを使う。実行時に PATH へ runtime の bin を付与する（例: `app/` 配下で `PATH="$PWD/../runtime/node/bin:$PATH" npm test`）。詳細は [AGENTS.md](../../../AGENTS.md) の「実行環境（Node.js / npm / npx）」を参照
+   - `npm` はグローバルではなく **runtime 配下**（`runtime/node/bin`、Windows は `runtime\node`）のものを使う。実行時に PATH へ runtime の bin を付与する（例: `app/` 配下で `PATH="$PWD/../runtime/node/bin:$PATH" npm test` / Windows は `$env:Path = "$PWD\..\runtime\node;$env:Path"; npm.cmd test`）。**Windows では `npm` / `npx` を裸で書かず `npm.cmd` / `npx.cmd` とする**（裸だと `npm.ps1` に解決され ExecutionPolicy で失敗する）。詳細は [AGENTS.md](../../../AGENTS.md) の「実行環境（Node.js / npm / npx）」を参照
 
 > 既存テストが赤い場合、レポート冒頭でその事実を強調する。リファクタリング提案は「テスト緑」を前提に組むため、まず赤を直すべき旨を書く。
 
@@ -288,7 +289,7 @@ app/specs/<feature-name>/
   - Phase 2: 純粋ロジックの切り出し（最も安全）
   - Phase 3: 呼び出し元の差し替え（型エラー駆動で進める）
   - Phase 4: 不要になったコード削除 + 命名整理
-  - Phase 5: 全テスト（単体 + 結合）+ Biome check の最終確認
+  - Phase 5: 全テスト（単体 + 結合）+ Biome check（`npm run lint`。`npx biome` は使わない）の最終確認
 
 ### Step 6: 生成後のサマリーと次のアクション
 

@@ -26,7 +26,7 @@ description: 既存システム（app/ 配下の実装済みコード）に対�
 
 [[spec-writing]] の制約をそのまま継承する。修正・機能追加の過程で制約を緩めてはいけない。
 
-> **コマンド実行の前提**: 本スキルのチェックリストに現れる `npm test` / `npm run dev` などは、すべて **runtime 配下**（`runtime/node/bin`、Windows は `runtime\node`）の npm を使う。グローバルの node/npm は無い前提。実行時は PATH に runtime の bin を付与する（詳細は [AGENTS.md](../../../AGENTS.md) の「実行環境（Node.js / npm / npx）」）。
+> **コマンド実行の前提**: 本スキルのチェックリストに現れる `npm test` / `npm run dev` などは、すべて **runtime 配下**（`runtime/node/bin`、Windows は `runtime\node`）の npm を使う。グローバルの node/npm は無い前提。実行時は PATH に runtime の bin を付与する（詳細は [AGENTS.md](../../../AGENTS.md) の「実行環境（Node.js / npm / npx）」）。**Windows では `npm` / `npx` を裸で書かず `npm.cmd` / `npx.cmd` とする**（裸だと `npm.ps1` に解決され ExecutionPolicy で失敗する）。
 
 ### 1. 技術スタック
 - **Hono 単体のフルスタック構成 (TypeScript)** を前提に既存実装が組まれているはず
@@ -263,7 +263,7 @@ app/specs/add-csv-export/ に5ファイル生成しました。
 - **スタイリング**: Tailwind CSS (CDN版) を踏襲 / 既存が未採用なら新規導入可（ビルド不要）
 - **データ保存**: <既存の方式を踏襲 / 変更する場合はその旨と理由>
 - **テスト**: Vitest（単体 + Hono `app.request()` による結合テスト）— 既存テストを必ず維持
-- **パッケージマネージャ**: npm（コマンドは `npm` / `npx` を標準とする）
+- **パッケージマネージャ**: npm（**ローカルツールは `package.json` の script 経由で呼ぶ。`npx` は使わない**）
 
 > Hono 単体構成のため、React / Next.js などフロントエンドフレームワークは新規導入しません。
 
