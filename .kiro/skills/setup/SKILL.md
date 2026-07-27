@@ -45,12 +45,16 @@ description: 「セットアップして」「環境構築して」「Node を�
 1. OS を確認（mac か Windows か）
 2. OSバージョン・CPU（アーキ）を「確認方法アナウンス付き」でヒアリング
 3. 要件を満たすか判定（満たさない場合は正直に伝える）
-4. 該当アーカイブを runtime/node/ に展開
+4. 既存の runtime/node を確認 → 無ければ該当アーカイブを runtime/node/ に展開
 5. フルパスで node -v を実行して動作確認
 6. 完了報告
 ```
 
-**必ずこの順で進める。特に 2 の「ヒアリング」を飛ばして展開に進んではいけない。**
+**必ずこの順で進める。特に 2 の「ヒアリング」を飛ばして展開に進んではいけない。また 4 の「展開前チェック」を飛ばしていきなり展開コマンドを打ってはいけない**（既存フォルダとの衝突でエラーになる。詳細はステップ4）。
+
+### コマンド実行時の前提
+
+このスキルが実行するコマンドは、**すべてワークスペース直下（`dist/` と `runtime/` がある階層）をカレントディレクトリとして**実行する。相対パス（`dist\...`、`runtime\...`）がそれ以外の場所から実行されると、展開先がずれたり Rename/Move に失敗したりする。
 
 ---
 
@@ -119,26 +123,74 @@ OS が分かったら、**確認方法をそのまま案内した上で**、バ�
 
 `runtime/node/` に展開し、フォルダ名を `node` に統一する。**このコマンドは skill が実行する。受講者に打たせない。**
 
-### Mac（Apple Silicon の例。Intel なら `darwin-x64` に読み替え）
+### ステップ4-1: 展開前チェック（必須・飛ばさない）
+
+**展開コマンドを打つ前に、必ず `runtime/node` の有無を確認する。** 既存フォルダがある状態で展開に進むと、Windows では `Rename-Item` / `Move-Item` が失敗し、mac では `mv` が既存フォルダの**中に**入れ子で移動してしまい静かに壊れる。
+
+```bash
+# Mac
+test -d runtime/node && echo EXISTS || echo NOT_FOUND
+```
+
+```powershell
+# Windows / PowerShell
+if (Test-Path runtime\node) { "EXISTS" } else { "NOT_FOUND" }
+```
+
+分岐:
+
+```
+runtime/node は存在するか？
+├ NOT_FOUND → ステップ4-2（展開）へ
+└ EXISTS    → 先にステップ5（動作確認）を実行する
+              ├ v24.18.0 が表示された → 再展開しない。
+              │    「すでにセットアップ済みです」と伝えてステップ6（完了報告）へ
+              └ 表示されない / エラー → 壊れているので作り直す。
+                   受講者に一言断ってから runtime/node を削除し、ステップ4-2へ
+```
+
+削除する場合の断り方と削除コマンド（**断りなく削除しない**）:
+
+> 「以前のセットアップの残りが壊れているようです。`runtime/node` フォルダを一度削除して入れ直してもよろしいですか?（このフォルダは Node.js 本体だけが入っている場所で、受講者の作業ファイルは含まれません）」
+
+```bash
+# Mac
+rm -rf runtime/node
+```
+
+```powershell
+# Windows / PowerShell
+Remove-Item -Recurse -Force runtime\node
+```
+
+### ステップ4-2: 展開する
+
+前回の途中失敗で展開フォルダ（`node-v24.18.0-...`）が残っていることがあるため、展開前に掃除してから展開する。
+
+#### Mac（Apple Silicon の例。Intel なら `darwin-x64` に読み替え）
 
 ```bash
 mkdir -p runtime
+rm -rf runtime/node-v24.18.0-darwin-arm64
 tar -xzf dist/node-v24.18.0-darwin-arm64.tar.gz -C runtime
 mv runtime/node-v24.18.0-darwin-arm64 runtime/node
 ```
 
-### Windows / PowerShell（x64 の例。ARM なら `win-arm64` に読み替え）
+#### Windows / PowerShell（x64 の例。ARM なら `win-arm64` に読み替え）
 
 ```powershell
 New-Item -ItemType Directory -Force -Path runtime | Out-Null
+if (Test-Path runtime\node-v24.18.0-win-x64) { Remove-Item -Recurse -Force runtime\node-v24.18.0-win-x64 }
 Expand-Archive -Force dist\node-v24.18.0-win-x64.zip -DestinationPath runtime
-Rename-Item runtime\node-v24.18.0-win-x64 runtime\node
+Move-Item -Path runtime\node-v24.18.0-win-x64 -Destination runtime\node
 ```
+
+> `Rename-Item` は使わない。`-NewName` にパス（`runtime\node`）を渡す形はカレントディレクトリ次第で失敗するため、パス指定が正式にサポートされている `Move-Item` を使う。
 
 制約:
 
 - 展開先は必ずワークスペース直下の `runtime/`。ホームディレクトリ等には展開しない（全受講者でパスを揃えるため）。
-- すでに `runtime/node/` が存在する場合は、まず動作確認（ステップ5）を行い、正常なら再展開せず「すでにセットアップ済み」と伝える。壊れている場合のみ `runtime/node` を削除して展開し直す（削除は必ず受講者に一言断ってから）。
+- **展開コマンドの前に必ずステップ4-1のチェックを行う。** 既存の `runtime/node` を無条件に上書き・削除しない。
 - **PATH は通さない。** 環境変数はいじらない。以降の開発は各 skill が `runtime/node` のフルパスで `node` を呼び出す。
 
 ---
@@ -159,7 +211,7 @@ runtime/node/bin/node -v
 runtime\node\node.exe -v
 ```
 
-`v24.18.0` と表示されれば成功。表示されない・エラーになる場合は、展開先のフォルダ構成（`runtime/node/bin/node` / `runtime\node\node.exe` が存在するか）を確認し、必要なら展開し直す。
+`v24.18.0` と表示されれば成功。表示されない・エラーになる場合は、展開先のフォルダ構成（`runtime/node/bin/node` / `runtime\node\node.exe` が存在するか）を確認し、必要なら「トラブルシュート」を参照して展開し直す。
 
 ---
 
@@ -169,10 +221,52 @@ runtime\node\node.exe -v
 
 > 「セットアップが完了しました ✅ Node.js v24.18.0 が `runtime/node` に用意できています。以降の作業では、この Node をこちらで自動的に使うので、受講者側で追加の設定は不要です。次は『何か作ってみたいので相談に乗って』と話しかけてみてください。」
 
+---
+
+## トラブルシュート
+
+受講者を不安にさせないよう、**エラー文をそのまま貼らず**「こういう状態なので、こう直します」と伝えてから対処する。
+
+### `Rename-Item` / `Move-Item` が「既に存在します」で失敗する（Windows）
+
+```
+Cannot create a file when that file already exists.
+```
+
+原因: `runtime\node` がすでに存在している（セットアップの再実行、前回の途中失敗、事前検証済みフォルダの残存など）。`Rename-Item` / `Move-Item` はリネーム先が既存だと失敗する（`-Force` を付けても既存フォルダは上書きされない）。
+
+対処: **ステップ4-1（展開前チェック）からやり直す。** まず動作確認して、正常なら再展開不要。壊れていれば断りを入れて `runtime\node` を削除してから展開する。
+
+### `Rename-Item` が「パスまたはデバイス名を表しています」で失敗する（Windows）
+
+```
+Cannot rename the specified target, because it represents a path or device name.
+```
+
+原因: カレントディレクトリがワークスペース直下でない状態で、`-NewName` にパスを渡している。
+
+対処: ワークスペース直下に移動し、ステップ4-2の `Move-Item` を使う手順で実行し直す。
+
+### `Remove-Item` / `rm -rf` でフォルダを削除できない
+
+原因: `node.exe` が実行中で、ファイルがロックされている（dev-server skill で起動したサーバなどが動いたまま）。
+
+対処: 起動中のサーバ・プロセスを停止し、`runtime` 配下を開いているエクスプローラやエディタのタブを閉じてから、もう一度削除する。
+
+### `runtime/node/node-v24.18.0-...` のような入れ子になっている（Mac）
+
+原因: `runtime/node` が既存の状態で `mv` を実行したため、既存フォルダの**中に**移動されてしまった。
+
+対処: 受講者に断ってから `rm -rf runtime/node` で削除し、ステップ4-2から展開し直す。
+
+---
+
 ## 絶対に守る制約（まとめ）
 
 1. **ヒアリングを飛ばさない。** OSバージョンと CPU を、確認方法の案内付きで必ず受講者から聞く。
 2. **要件を満たさない場合は展開しない。** 正直に伝え、講師相談を促す。ごまかして進めない。
 3. **展開先は `runtime/node/` に固定。** フォルダ名は `node` に統一する。
-4. **PATH・環境変数を変更しない。** 以降は各 skill がフルパスで `node` を呼ぶ。
-5. **コマンドは skill が代行する。** 受講者にターミナル入力をさせない。削除を伴う操作は必ず事前に一言断る。
+4. **展開前に必ず `runtime/node` の有無を確認する（ステップ4-1）。** チェックを飛ばして展開コマンドを打たない。既存フォルダがあるまま展開すると Windows は失敗し、mac は入れ子になって静かに壊れる。
+5. **PATH・環境変数を変更しない。** 以降は各 skill がフルパスで `node` を呼ぶ。
+6. **コマンドは skill が代行する。** 受講者にターミナル入力をさせない。削除を伴う操作は必ず事前に一言断る。
+7. **コマンドはワークスペース直下をカレントディレクトリとして実行する。**
