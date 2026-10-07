@@ -14,27 +14,16 @@ description: 「開発サーバ起動して」「サーバ立ち上げて」「�
 
 ようにすること。**「サーバが起動したのかどうか分からない」「止め方が分からなくてポートを掴んだまま放置」「同じサーバを二重起動してポート競合」を防ぐ**ことが最大の狙い。
 
+受講者PCは **macOS（Apple Silicon / Intel）と Windows（x64 / ARM64）の両方**を想定する。判定処理は OS 共通の補助スクリプトに任せ、OS ごとに違うのは「コマンドの呼び出し方」だけにしている。
+
 ## 起動トリガー (発動キーワード例)
 
 以下のような依頼が来たら、迷わずこの skill を発動する:
 
-### 起動
-
-- 「開発サーバ起動して」「サーバ立ち上げて」「dev サーバ起動」
-- 「アプリ動かして」「ローカルで起動して」「`npm run dev` して」
-
-### 停止
-
-- 「サーバ止めて」「サーバ停止」「dev 落として」
-- 「シャットダウンして」「終了して」（文脈がサーバ関連の場合）
-
-### 再起動
-
-- 「サーバ再起動」「リスタート」「立て直して」
-
-### 状態確認
-
-- 「サーバ動いてる?」「サーバの状態は?」「ポート 3000 誰か使ってる?」
+- 起動: 「開発サーバ起動して」「サーバ立ち上げて」「dev サーバ起動」「アプリ動かして」「ローカルで起動して」「`npm run dev` して」
+- 停止: 「サーバ止めて」「サーバ停止」「dev 落として」「シャットダウンして」「終了して」（文脈がサーバ関連の場合）
+- 再起動: 「サーバ再起動」「リスタート」「立て直して」
+- 状態確認: 「サーバ動いてる?」「サーバの状態は?」「ポート 3000 誰か使ってる?」
 
 ## 想定ユーザー
 
@@ -46,132 +35,143 @@ description: 「開発サーバ起動して」「サーバ立ち上げて」「�
 
 - 「バックグラウンド (画面に出ない裏側で動かす実行モード)」
 - 「ポート (ネットワークで通信に使う番号の窓口)」
+- 「プロセス (PC の中で動いているプログラム1つ分)」「PID (プロセスに付く番号)」
 
-## 絶対に守る制約
+---
 
-### 1. 起動コマンドは `package.json` の `dev` スクリプトを使う
+## 基本の考え方（最初に読む）
 
-- `app/package.json` の `scripts.dev` を実行する（直接 `tsx` 等を呼ばない）
-- `dev` スクリプトが定義されていなければ起動せずに報告して停止
-- **`npm` は runtime 配下のものを使う**（グローバルの node/npm は存在しない前提）。実行時に PATH へ runtime の bin を付与する。詳細は [AGENTS.md](../../../AGENTS.md) の「実行環境（Node.js / npm / npx）」を参照
-- **Windows では `npm` / `npx` と裸で書かず `npm.cmd` / `npx.cmd` と書く**（裸だと `npm.ps1` に解決され ExecutionPolicy で失敗する。[AGENTS.md](../../../AGENTS.md) の「Windows では必ず `.cmd` を明示する」参照）
+### 1. 判定は補助スクリプトの「結果ファイル」で行う
 
-### 2. 必ずバックグラウンドで起動する
+Kiro のコマンド実行ツールは、環境によって **stdout（画面に出る文字）が読めない・前のコマンドの出力が混ざる・終了コードが当てにならない** ことがある（Windows で実際に発生。macOS でも長めのコマンドで出力が空のまま返ることがあった）。そこで、ポート確認・起動待ち・停止確認はすべて同梱の補助スクリプトに任せ、**結果は `read_file` で結果ファイルを読んで判定する**。stdout と終了コードは補助として扱う。
 
-- Kiro のバックグラウンドプロセス機能（`control_bash_process` の `action: "start"`）を使う。通常のコマンド実行（`execute_bash`）で前景実行すると以降の作業がブロックされる
-- このツールでは **`cd` とコマンド連結（`&&` / `;` / `||`）が使えない**。作業ディレクトリは `cwd` パラメータで `app` を指定する
-- 起動後は返却された **terminalId を必ず控えて** ユーザーに報告する。ログ参照（`get_process_output`）と停止時にこの ID が必要
+- スクリプト: `<WS>/.kiro/skills/dev-server/scripts/dev-server-check.mjs`（Node 標準モジュールのみ・両 OS 共通）
+- 結果ファイル: `<WS>/runtime/tmp/dev-server/<resultId>.json`（1行の JSON）
+- `<WS>` は **ワークスペース直下の絶対パス**。セッション情報に表示されるワークスペースのパスを使う。`$PWD` や `cwd` から組み立てない（`cwd` が効かないことがある）
 
-### 3. 起動成功判定は「HTTP 応答が返るまで」を待つ
+| サブコマンド | 何をするか | 成功（`ok: true`、終了コード 0） |
+|---|---|---|
+| `port <port>` | ポートが空いているか（接続を試すだけ） | 空いている（`result: "free"`）。使用中は `result: "in_use"` で `ok: false` |
+| `wait <url> <秒>` | HTTP 応答が返るまで 0.5 秒間隔で待つ | 応答があった（`result: "up"`。404 や 500 でも起動済み） |
+| `free <port> <秒>` | ポートが解放されるまで待つ | 解放された（`result: "free"`） |
+| `who <port>` | 待ち受け中のプロセスの PID・コマンドを表示（止めはしない） | 調べられた（`processes` に一覧） |
+| `clean` | 結果ファイルをまとめて削除（自分の結果ファイルだけ残る） | 削除できた |
 
-- 判定は「`http://localhost:3000` が HTTP 応答を返すか」と「`get_process_output` のログに起動シグナル（`Server running at`, `Listening on`, `http://localhost:` 等）が出ているか」で行う
-- 待機は最大 30 秒。タイムアウトしたらログ末尾をユーザーに見せて停止する
-- 「コマンドを投げただけ」では起動完了と見なさない（プロセスがクラッシュしていても気付けない）
+- 必ず `--id <resultId>` を付ける。`resultId` は英数字・`-`・`_` のみ。**実行ごとに別の名前にする**（例: `status-port-1` → 再試行なら `status-port-2`）。同じ名前を使い回すと古い結果を読み違える
+- 引数の誤り・タイムアウト・想定外のエラーでも、必ず `ok: false` の JSON と終了コード 1 が返る（`result` は `usage_error` / `timeout` / `error`）
+- **読む → 消す の順で1つずつ行う**: `read_file` で読み終えてから `delete_file` で削除する（同時に投げると読む前に消えることがある）。`delete_file` が使えない場合は、作業の最後に `clean` を1回実行する
+- ポートの空き判定は接続を試すだけで、`lsof` / `netstat` / `Get-NetTCPConnection` は使わない。`who` だけは PID を調べるため内部で `lsof`（macOS）/ `netstat -ano`（Windows）を使う
 
-### 4. ポート競合を勝手に解決しない
+### 2. OS ごとの違いは「呼び出し方」だけ
 
-- 起動前に対象ポート (デフォルト 3000) が空いているか確認する。受講者PCの OS に応じてコマンドを使い分ける:
-  - macOS: `lsof -i :3000`（無ければ `netstat -an | grep 3000`）
-  - Windows (PowerShell): `Get-NetTCPConnection -LocalPort 3000`（無ければ `netstat -ano | findstr :3000`）
-- 既に誰かが使っていたら **占有プロセスを表示** して、チャットで次の選択肢を提示し回答を待つ:
-  - 「既存サーバを止めて起動し直す」
-  - 「別ポートで起動する」
-  - 「中止する」
-- **無確認で `kill` してはいけない**（ユーザーが意図的に動かしている別作業の可能性）
+| 項目 | macOS | Windows |
+|---|---|---|
+| node のパス | `<WS>/runtime/node/bin/node` | `<WS>\runtime\node\node.exe` |
+| npm | `"<WS>/runtime/node/bin/npm"`（絶対パス） | `npm.cmd`（必須） |
+| PATH の区切り | `:` | `;` |
+| 引用付きパスの実行 | `"<path>" args` | `& "<path>" args` |
+| ツール名（確認済みの例） | `execute_bash` / `control_bash_process` | `execute_pwsh` / `control_pwsh_process` |
+| 起動コマンドの `;` 連結 | 使わない（不要） | `$env:Path = "..."; npm.cmd run dev` の形は動作確認済み |
 
-### 5. 停止は terminalId を使った `control_bash_process` の stop を最優先
+- **ツール名は決め打ちしない。** 実行中のセッションで使えるツール一覧を確認し、上の表と違えばそちらに従う。以降の本文では「コマンド実行ツール」（`execute_*`）・「バックグラウンドプロセスツール」（`control_*_process`）と呼ぶ。`get_process_output` / `list_processes` / `read_file` / `delete_file` / `list_directory` は両 OS 共通
+- パスはスペースや丸かっこを含むことがある（例: `agentic_coding_base_for_kiro_ide-main (1)`）。**node・スクリプト・npm は必ず絶対パスを引用符で囲んで呼ぶ**
+- macOS で npm を絶対パスで呼ぶのは、素の `npm` がシェルの alias（`~/.zshrc` などに書かれた別名）に横取りされることがあるため（実際に `npm` が警告を出すだけの alias に置き換わっていた PC があった）
+- Windows で `npm` と裸で書くと `npm.ps1` に解決され ExecutionPolicy で失敗する。必ず `npm.cmd`。`Set-ExecutionPolicy` は実行しない（[AGENTS.md](../../../AGENTS.md)「Windows では必ず `.cmd` を明示する」）
 
-- このセッション内で起動したサーバは terminalId が分かっているので、まず `control_bash_process`（`action: "stop"`, `terminalId`）で停止
-- terminalId を見失った場合は `list_processes` で Kiro が管理中のプロセス一覧から `npm run dev` 系を探す
-- それでも見つからない（Kiro の管理外・過去セッションの残骸など）場合のみ、`lsof -i :3000` でプロセスを特定 → ユーザー確認の上で `kill`
-- 一括 `pkill -f tsx` のような **広い範囲の kill は使わない**（他作業を巻き込む）
+#### 補助スクリプトの呼び方（コマンド実行ツールで前景実行してよい）
 
-### 6. 状態確認は破壊的操作を含めない
+```bash
+# macOS（zsh / bash）
+"<WS>/runtime/node/bin/node" "<WS>/.kiro/skills/dev-server/scripts/dev-server-check.mjs" port 3000 --id status-port-1
+```
 
-- `lsof`, `ps`, `list_processes`, `get_process_output` のみ。プロセスを止めない
+```powershell
+# Windows（PowerShell）。先頭の & が必要（引用符で囲んだパスをコマンドとして実行するため）
+& "<WS>\runtime\node\node.exe" "<WS>\.kiro\skills\dev-server\scripts\dev-server-check.mjs" port 3000 --id status-port-1
+```
+
+以降の手順では、この呼び出しを **`check <サブコマンド> ... --id <resultId>`** と略記する。実行後は `<WS>/runtime/tmp/dev-server/<resultId>.json` を `read_file` で読む。
+
+### 3. 守る制約
+
+- 起動は `app/package.json` の `dev` スクリプト経由（直接 `tsx` 等を呼ばない）。`dev` が無ければ起動せず報告して止まる
+- Node / npm は `runtime/node` のものだけを使う。PATH はコマンドの中でその場だけ付与し、永続的に変えない（[AGENTS.md](../../../AGENTS.md)「実行環境」）
+- 開発サーバは必ず **バックグラウンドプロセスツール**で起動する。コマンド実行ツールで前景実行すると以降の作業が止まる
+- **Windows ではコマンド実行ツールで `npm.cmd` を前景実行しない。** cmd バッチが途中で止まると「バッチ ジョブを終了しますか (Y/N)?」でシェルが固まり、以降のコマンドが実行されなくなる。判定は `node.exe` を直接呼ぶ補助スクリプトで行う
+- ファイルの有無の確認は `read_file` / `list_directory` で行い、`ls` / `Test-Path` の出力に頼らない
+- ポート競合を勝手に解決しない。**無確認で kill しない**
+- `pkill -f node` / `pkill -f tsx` / `taskkill /IM node.exe` / `Stop-Process -Name node` のような **広い範囲の kill はしない**
+- kill 系（`kill` / `Stop-Process` / `taskkill`）や削除系が **Kiro の権限設定で拒否されたら、別の書き方で回避しない**。コマンドを示してユーザーに手動実行を頼む
+- git / zip は使わない。新しいライブラリは追加しない
+
+---
 
 ## 対話フロー
 
-### Step 0: 前提チェック（並列）
+### Step 0: 前提チェック
 
-プロジェクトルートを基準に相対パスで確認する（環境によって配置パスが異なるため、絶対パスを決め打ちしない）:
+1. `read_file` で `<WS>/app/package.json` を読み、`scripts.dev` があるか確認する。無ければ「`app/package.json` に `dev` スクリプトが見つかりません」と伝えて止まる
+2. `list_directory` で `<WS>/runtime/node` と `<WS>/app/node_modules` があるか確認する
+   - `runtime/node` が無い → 「先に Node.js のセットアップが必要です。『セットアップして』と話しかけてください」と案内して止まる（setup skill の担当）
+   - `node_modules` が無い → 依存パッケージ（アプリが使う部品）を入れる必要がある。ユーザーに一言断り、**バックグラウンドプロセスツール**で `install` を実行する（コマンドは Step 1A-2 の `run dev` を `install` に置き換えたもの）。完了は `get_process_output` の `added ... packages` / `up to date` と、`list_directory` で `node_modules` ができたことの両方で判断する
 
-```bash
-# 1. app/ ディレクトリと package.json
-ls app/package.json
+### Step 1A: 起動
 
-# 2. dev スクリプトの存在確認
-grep -E '"dev"\s*:' app/package.json
-```
+#### 1A-1. 二重起動・ポート競合のチェック
 
-無ければ「`app/package.json` に `dev` スクリプトが見つかりません」とユーザーに伝えて停止。
+1. `list_processes` で Kiro が管理しているプロセスを確認する。**`status` が `running`** で、コマンドに `run dev` を含むものがあれば、すでに起動済みの可能性が高い（`stopped` のものは過去の記録なので無視する）
+2. `check port 3000 --id start-port-1` を実行し、結果ファイルを読む
+   - `result: "free"` → 1A-2 へ
+   - `result: "in_use"` → `check who 3000 --id start-who-1` で PID とコマンドを調べ、チャットで次の選択肢を出して**回答を待つ**:
 
-### Step 1A: 起動の場合
+     ```
+     ⚠️ ポート 3000 はすでに使われています。
+     - 使っているプロセス: PID 12345（node ... src/index.ts）
+     - Kiro で起動した dev サーバ: あり（terminalId: term_xxx） / なし
 
-#### 1A-1. ポート空きチェック
+     どうしますか?
+     1. 今のサーバを止めて起動し直す
+     2. 別のポートで起動する（アプリがポート番号の変更に対応している場合のみ）
+     3. 中止する（今のサーバをそのまま使う）
+     ```
 
-受講者PCの OS に応じて実行する:
-
-```bash
-# macOS
-lsof -i :3000 || echo "OK: port 3000 is free"
-```
-
-```powershell
-# Windows / PowerShell
-Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue; if (-not $?) { "OK: port 3000 is free" }
-# 上記が使えない場合: netstat -ano | findstr :3000
-```
-
-占有されていたら、占有プロセスの情報（PID, COMMAND）を表示して、チャットで次のアクション（止めて起動し直す / 別ポート / 中止）を確認する。
+     Kiro 管理のサーバがすでに動いているなら、「すでに起動しています。http://localhost:3000 を開いてください」と伝えるだけでもよい。**二重に起動しない**
+   - `result: "error"` → 結果の `error` をそのまま読み、引数やパスを直して1回だけ再試行する
 
 #### 1A-2. バックグラウンド起動
 
-`control_bash_process` を `action: "start"` で呼び、**`cwd` に `app` ディレクトリ（ワークスペース直下の `app`）を指定**する。`cd` やコマンド連結は使えないので、PATH 付与はコマンド先頭の環境変数指定で行う（`app/` から見て runtime は1つ上の階層）:
+バックグラウンドプロセスツールを `action: "start"`、**`cwd` に `<WS>/app`（絶対パス）** で呼ぶ。`cd` は使わない。
 
 ```bash
-# macOS / Linux（command に指定する文字列。cwd = app）
-PATH="$PWD/../runtime/node/bin:$PATH" npm run dev
+# macOS（command に指定する文字列。cwd = <WS>/app）
+PATH="<WS>/runtime/node/bin:$PATH" "<WS>/runtime/node/bin/npm" run dev
 ```
 
 ```powershell
-# Windows / PowerShell（npm ではなく npm.cmd。裸の npm は npm.ps1 に解決され ExecutionPolicy で落ちる）
-# control_bash_process は `;` 連結を受け付けないため、cmd.exe に1コマンドとして渡す（cwd = app）
-cmd.exe /d /c "set PATH=%CD%\..\runtime\node;%PATH%&& npm.cmd run dev"
+# Windows / PowerShell（command に指定する文字列。cwd = <WS>\app）
+$env:Path = "<WS>\runtime\node;$env:Path"; npm.cmd run dev
 ```
 
-返却された **terminalId** を控える。
+- 返ってきた **terminalId を必ず控える**（ログ確認と停止に使う）
+- `isReused: true` が返ったら、同じコマンドがすでに動いている。新しく起動されたわけではないので 1A-1 の「起動済み」として扱う
+- `cwd` が効かずに `Missing script: "dev"` や `package.json` が見つからないエラーがログに出た場合は、`--prefix` で app の場所を指定する（macOS で動作確認済み。Windows は未検証）:
+  - macOS: `PATH="<WS>/runtime/node/bin:$PATH" "<WS>/runtime/node/bin/npm" --prefix "<WS>/app" run dev`
+  - Windows: `$env:Path = "<WS>\runtime\node;$env:Path"; npm.cmd --prefix "<WS>\app" run dev`
+- PATH の付与は省略しない。`npm run dev` から呼ばれる `tsx` は裸の `node` を呼ぶため、runtime の node を PATH の先頭に置く必要がある（[AGENTS.md](../../../AGENTS.md)「補足」）
+- Windows で起動コマンド自体がツールに拒否された場合は、別の書き方を試し続けず、「Kiro のターミナルで次を貼り付けて実行してください」とユーザーに案内する: `cd "<WS>\app"; $env:Path = "<WS>\runtime\node;$env:Path"; npm.cmd run dev`（この場合の停止はユーザーのターミナルで `Ctrl+C`）
 
-> Windows で上記がツールに拒否された場合は、無理に別の書き方を試し続けず、ユーザーに「Kiro のターミナルを開いて次のコマンドを貼り付けて実行してください」と案内する（`cd app; $env:Path = "$PWD\..\runtime\node;$env:Path"; npm.cmd run dev`）。この場合、停止もユーザーのターミナルで `Ctrl+C` してもらう。
+#### 1A-3. 起動の確認（2つとも満たしたら成功）
 
-> グローバルの node/npm は存在しない前提。必ず runtime 配下の npm を PATH 付与で使う（[AGENTS.md](../../../AGENTS.md) 参照）。パッケージマネージャの読み替え指示がある場合も、対象バイナリは runtime 配下のものを用いる。
->
-> **Windows で `npm run dev` と裸で書くと、PowerShell が `npm.ps1` を選び「このシステムではスクリプトの実行が無効になっているため…`npm.ps1` を読み込むことができません」で起動に失敗する。** 必ず `npm.cmd` と書く（`.cmd` は ExecutionPolicy の対象外）。`Set-ExecutionPolicy` で受講者PCのポリシーを変更して回避しないこと。詳細は [AGENTS.md](../../../AGENTS.md) の「Windows では必ず `.cmd` を明示する」を参照。
+1. `check wait http://localhost:3000 30 --id start-wait-1` を実行し、結果ファイルが `result: "up"` であること
+2. `get_process_output`（terminalId 指定）に `Server running at` / `Listening on` / `http://localhost:` などの起動メッセージがあり、エラーが出ていないこと
 
-#### 1A-3. 起動ログ待機
-
-Kiro のバックグラウンドプロセスはログをファイルに書き出さないため、ログファイルの監視はしない。代わりに次の2段で判定する。
-
-1. **HTTP 応答を待つ**: 通常のコマンド実行（`execute_bash`）で、setup 済みなら必ず存在する **同梱 Node（`runtime/node`）のワンライナー** を実行し、`http://localhost:3000` が応答するまで最大30秒待つ。`sleep` ループや `timeout` コマンド（macOS に標準搭載されておらず、Windows の `timeout` は別物）は使わない
-
-   ```bash
-   # macOS / Linux（プロジェクトルートから実行）
-   runtime/node/bin/node -e 'const u=process.argv[1];const t0=Date.now();(async function poll(){try{const r=await fetch(u);console.log("STARTED (HTTP "+r.status+")");process.exit(0)}catch(e){}if(Date.now()-t0>30000){console.log("TIMEOUT");process.exit(1)}setTimeout(poll,500)})();' "http://localhost:3000"
-   ```
-
-   ```powershell
-   # Windows / PowerShell（プロジェクトルートから実行。スクリプト文字列は上と同一）
-   runtime\node\node.exe -e 'const u=process.argv[1];const t0=Date.now();(async function poll(){try{const r=await fetch(u);console.log("STARTED (HTTP "+r.status+")");process.exit(0)}catch(e){}if(Date.now()-t0>30000){console.log("TIMEOUT");process.exit(1)}setTimeout(poll,500)})();' "http://localhost:3000"
-   ```
-
-   - 0.5 秒ごとに接続を試し、HTTP 応答があれば（ステータスが 404 等でも）サーバは起動済みと判定する
-2. **ログを確認する**: `get_process_output`（`terminalId` を指定）で起動ログを取得し、エラーが出ていないか・ポート番号が想定どおりかを確認する
-
-- `TIMEOUT` になったら `get_process_output` でログ末尾（`lines: 50` 程度）をユーザーに見せて、原因切り分けを促す（依存欠落 / 型エラー / ポート競合 等）
+- ログに **コマンドのエコーや「バッチ ジョブを終了しますか (Y/N)?」しか出ていないだけでは、クラッシュと判断しない**。必ず `wait` の結果で確かめる
+- `result: "timeout"` → `get_process_output`（`lines: 50` 程度）でログ末尾を見て、原因を初学者向けに伝える（依存の不足 / 型エラー / ポート競合 など）。ログが空・エコーだけなら「シェルが固まったとき」へ
+- ログのポート番号が 3000 以外なら、その番号で `wait` をやり直し、報告もその番号にする
 
 #### 1A-4. 結果報告
 
-本ハンズオンは **受講者自身の持ち込みPC** 上で動く。開発サーバも受講者のPC内で起動するので、**同じPCのブラウザから `http://localhost:3000` でアクセスする**（外部公開やIPの取得は不要）。
+開発サーバは **受講者自身のPC内** で動くので、同じPCのブラウザから `http://localhost:3000` で開ける（外部公開や IP の確認は不要。`0.0.0.0` への変更も不要）。
 
 ```
 ✅ 開発サーバを起動しました。
@@ -182,37 +182,18 @@ Kiro のバックグラウンドプロセスはログをファイルに書き出
 停止したいときは「サーバ止めて」と伝えてください。
 ```
 
-> 起動したのにブラウザで開けない場合、まず起動ログにエラーが出ていないか（依存欠落 / 型エラー / ポート競合）を確認する。ポート番号が 3000 以外に変わっていないか、`app/src/index.ts` の `serve()` のポート設定とログの `http://localhost:...` の番号も突き合わせる。**持ち込みPCでは同一PCからのアクセスなので `localhost` バインドのままで問題ない**（`0.0.0.0` への変更は不要）。
+### Step 1B: 停止
 
-### Step 1B: 停止の場合
+#### 1B-1. 止める対象を特定する
 
-#### 1B-1. 稼働中タスクの特定
+- このセッションで起動した terminalId が分かっていればそれを使う
+- 分からなければ `list_processes` で `status: running` かつ `run dev` を含むものを探す（当て推量の terminalId で stop しない）
+- 見つからなければ `check who 3000 --id stop-who-1` で PID を調べ、「このプロセスを止めますか?」と確認して回答を待つ（1B-3 の手順で止める）
 
-- セッション内で起動した terminalId が分かっていればそれを優先
-- 分からなければ `list_processes` で Kiro が管理中のプロセスから `npm run dev` 系（`cwd` が `app`）を探す
-- それでも見つからない場合はポート占有プロセスを特定し（macOS: `lsof -i :3000` / Windows: `netstat -ano | findstr :3000`）、チャットで「このプロセスを止めますか?」と確認して回答を待つ
+#### 1B-2. 停止して解放を確かめる
 
-#### 1B-2. 停止実行
-
-- Kiro 管理下のプロセスなら `control_bash_process`（`action: "stop"`, `terminalId`）で停止
-- Kiro 管理外（過去セッションの残骸など）なら、ユーザー承認の上で対象PIDを停止する:
-  - macOS: `kill <PID>`（`kill -9` は最終手段。まずは通常 `kill` で）
-  - Windows: `Stop-Process -Id <PID>`（強制は `-Force`。または `taskkill /PID <PID> /F`）
-  - これらのコマンドは Kiro の権限設定で拒否されることがある。拒否されたら別の書き方で回避を試みず、コマンドを提示して「Kiro のターミナルに貼り付けて実行してください」とユーザーに依頼する
-
-#### 1B-3. 停止確認
-
-```bash
-# macOS
-lsof -i :3000 || echo "OK: port 3000 is free"
-```
-
-```powershell
-# Windows / PowerShell
-netstat -ano | findstr :3000; if (-not $?) { "OK: port 3000 is free" }
-```
-
-ポートが空いたことを確認して報告:
+1. バックグラウンドプロセスツールを `action: "stop"`、`terminalId` 指定で呼ぶ
+2. **必ず** `check free 3000 10 --id stop-free-1` を実行し、結果ファイルが `result: "free"` であることを確かめてから報告する
 
 ```
 🛑 開発サーバを停止しました。
@@ -221,38 +202,40 @@ netstat -ano | findstr :3000; if (-not $?) { "OK: port 3000 is free" }
 - 再度起動したいときは「サーバ起動して」と伝えてください。
 ```
 
-### Step 1C: 再起動の場合
+#### 1B-3. 止めたのにポートが空かないとき（子プロセスの残り）
 
-- Step 1B（停止）→ Step 1A（起動）を順に実行
-- 停止確認まで完了してから起動に進む（同時並行しない）
+`npm run dev` は `npm` → `tsx watch` → `node`（実際のサーバ）と親子でプロセスを起動する。親を止めても子が残ってポートを使い続けることがある。
 
-### Step 1D: 状態確認の場合
+1. `check who 3000 --id stop-who-2` で残っているプロセスの PID とコマンドを調べる
+2. チャットで PID とコマンドを示し、止めてよいか確認する:
 
-並列で以下を実行して整形:
+   ```
+   サーバ本体（子プロセス）が残っていて、ポート 3000 を使い続けています。
+   - PID 12345: node ... src/index.ts
+   このプロセスだけを止めてもよいですか?
+   ```
 
-```bash
-# 1. ポート占有状況（macOS）
-lsof -i :3000 || echo "free"
-```
+3. 承認されたら **その PID だけ** を止める
+   - macOS: `kill <PID>`（`kill -9` は通常の kill で止まらないときの最終手段）
+   - Windows: `Stop-Process -Id <PID>`（止まらないときは `-Force` を付ける）
+   - これらは Kiro の権限設定で拒否されることがある。拒否されたら回避せず、上のコマンドを示して「Kiro のターミナルに貼り付けて実行してください」と頼み、完了の返事を待つ
+4. もう一度 `check free 3000 10 --id stop-free-2` で解放を確かめる
 
-```powershell
-# 1. ポート占有状況（Windows / PowerShell）
-netstat -ano | findstr :3000; if (-not $?) { "free" }
-```
+### Step 1C: 再起動
 
-```
-# 2. Kiro が管理しているバックグラウンドプロセスの状態
-#    → list_processes で一覧を取得（terminalId / command / cwd / status）
-#    → 該当プロセスがあれば get_process_output で直近ログも確認
-```
+- Step 1B（停止）を最後まで行い、**`free` の成功を確かめてから** Step 1A（起動）に進む。同時に進めない
+- 停止側で解放を確認済みなら、1A-1 の `port` チェックは `--id restart-port-1` のように別の名前で行う
 
-報告例:
+### Step 1D: 状態確認（止めたりはしない）
+
+1. `list_processes` で Kiro 管理のプロセスを確認する（`status: running` のもの）。あれば `get_process_output` で直近ログも見る
+2. `check port 3000 --id status-port-1`。使用中なら `check who 3000 --id status-who-1` で PID も調べる
 
 ```
 📡 現在の状態
 
-- ポート 3000: 使用中 (PID 12345, COMMAND: node)
-- Kiro で起動した dev サーバ: あり (terminalId: ..., status: running)
+- ポート 3000: 使用中（PID 12345, node ... src/index.ts）
+- Kiro で起動した dev サーバ: あり（terminalId: ..., status: running）
 - ブラウザで開く: http://localhost:3000
 ```
 
@@ -265,16 +248,54 @@ netstat -ano | findstr :3000; if (-not $?) { "free" }
 - 起動中の dev サーバ: なし
 ```
 
+### 後片付け（各 Step の最後）
+
+読み終えた結果ファイルは都度 `delete_file` で消す。消し忘れや `delete_file` が使えない場合は、最後に `check clean --id cleanup-1` を実行し、その結果ファイル1つを `delete_file` で消す。
+
+---
+
+## シェルが固まったとき・結果がおかしいとき（OS を問わず同じ手順）
+
+症状の例: 「バッチ ジョブを終了しますか (Y/N)?」で止まる（Windows で発生）、コマンドを投げても何も返らない、前のコマンドの出力が返ってくる、結果ファイルができない。
+
+1. **新しい resultId で1回だけ再試行する**（例: `start-wait-1` → `start-wait-2`）。結果ファイルが新しくできていれば、その内容を正とする
+2. それでもだめなら `list_processes` で残っているプロセスを確認し、`status: running` の不要なものがあれば terminalId で stop する
+3. それでも反応しなければ、ユーザーに次をお願いして止まる:
+
+   > 「Kiro が使っているターミナルが応答しなくなったようです。お手数ですが、画面下のターミナルパネルで該当のターミナルを閉じて（ゴミ箱アイコン）、もう一度『サーバ起動して』と話しかけてください。改善しない場合は Kiro を再起動してください。」
+
+- **同じコマンドを何度も繰り返さない。** 書き方を少しずつ変えて試し続けることもしない
+- macOS で同じ症状が起きるかは未確認。起きた場合も上の順で切り分ける
+
+---
+
+## 動作確認の状況と手動チェックリスト
+
+- **macOS（Apple Silicon、macOS 26.6、zsh、Kiro IDE）: 確認済み。** 状態確認 → 起動 → 起動中の二重起動検出 → 停止 → 再起動を、すべて結果ファイル経由で確認した。`control_bash_process` の stop で `npm` → `tsx watch` → `node` の子プロセスまで止まり、ポートはすぐ解放された
+- **Windows: 未検証**（この版の手順では実機で試していない）。以前の版で `$env:Path = "..."; npm.cmd run dev` による起動と HTTP 200 は確認できている。ツール名 `execute_pwsh` / `control_pwsh_process` もそのときの観測
+
+Windows（または未検証の環境）で初めて使うときは、次を順に確かめる。どれかが失敗したら、その結果ファイルの内容とツール名を記録して講師に共有する。
+
+1. [ ] 状態確認: `& "<WS>\runtime\node\node.exe" "<WS>\.kiro\skills\dev-server\scripts\dev-server-check.mjs" port 3000 --id chk-1` → `<WS>\runtime\tmp\dev-server\chk-1.json` が `"result":"free"`。`list_processes` に running の dev サーバが無い
+2. [ ] 起動: 1A-2 のコマンドで起動 → `wait http://localhost:3000 30 --id chk-2` が `"result":"up"` → `get_process_output` に `Server running at` → terminalId を控える
+3. [ ] 二重起動の検出: もう一度起動を頼む → `port 3000 --id chk-3` が `"result":"in_use"`、`who 3000 --id chk-4` に PID が出る → 選択肢を出して起動しない
+4. [ ] 停止: terminalId で stop → `free 3000 10 --id chk-5` が `"result":"free"`。`free` が timeout なら子プロセスが残っている（1B-3 を試し、そのことを記録する）
+5. [ ] 再起動: 停止の `free` 成功を確かめてから起動し、2 と同じ確認が通る
+6. [ ] パス: ワークスペースのパスにスペースや丸かっこが含まれる状態で 1〜5 が通る
+7. [ ] 後片付け: `clean --id chk-9` のあと、`<WS>\runtime\tmp\dev-server\` に `chk-9.json` 以外が残っていない（最後にそれも削除）
+
 ## やってはいけないこと
 
-- 開発サーバを **前景実行** すること（以降の操作がブロックされる）
-- 起動コマンドを投げただけで **起動成功と判断** すること（クラッシュを見落とす）
-- ポート 3000 が占有されているときに **無確認で `kill`** すること
-- `pkill -f tsx` / `pkill -f node`（Windows なら `taskkill /IM node.exe /F` / `Stop-Process -Name node`）のような **広範囲な kill** で巻き添え停止すること
-- `package.json` を **無視して直接 `tsx` 等を呼び出す** こと（スクリプトを介すことで設定の一貫性を保つ）
-- terminalId を当て推量で stop すること（必ず `list_processes` で実在を確認してから）
-- `kill` 等が権限設定で拒否されたときに、書き方を変えて回避を試みること（ユーザーに手動実行を依頼する）
-- 停止後にポートが解放されたか **確認せず完了報告** すること
+- 開発サーバを **前景実行** すること（以降の操作がブロックされる）。Windows で `npm.cmd` をコマンド実行ツールで前景実行すること
+- 起動コマンドを投げただけ、またはログだけを見て **起動成功・失敗を判断** すること（必ず `wait` の結果ファイルで確かめる）
+- stdout や終了コードだけを見て判定すること（まず結果ファイルを読む）
+- `$PWD` や相対パス前提で node・スクリプトを呼ぶこと（絶対パスを引用符で囲む）
+- ポート 3000 が使用中のときに **無確認で kill** すること・**二重起動** すること
+- 広い範囲の kill（`pkill -f node`、`taskkill /IM node.exe` など）で巻き添えにすること
+- kill 系や削除系が権限設定で拒否されたときに、書き方を変えて回避すること
+- 停止後に `free` で解放を **確認せずに完了報告** すること
+- 同じコマンドを何度も繰り返すこと（「シェルが固まったとき」の手順に従う）
+- `Set-ExecutionPolicy` で受講者PCの設定を変えること
 - 専門用語をそのまま投げて初学者を置いていくこと
 
 ## ヒント: 初学者へのよくある声かけ例
