@@ -58,12 +58,13 @@ description: 「開発サーバ起動して」「サーバ立ち上げて」「�
 
 ### 2. 必ずバックグラウンドで起動する
 
-- Bash の `run_in_background` を使う。前景実行すると以降の作業がブロックされる
-- 起動後は **ログ出力先（出力ファイルパス）と task_id を必ず控えて** ユーザーに報告する。停止時にこの ID が必要
+- Kiro のバックグラウンドプロセス機能（`control_bash_process` の `action: "start"`）を使う。通常のコマンド実行（`execute_bash`）で前景実行すると以降の作業がブロックされる
+- このツールでは **`cd` とコマンド連結（`&&` / `;` / `||`）が使えない**。作業ディレクトリは `cwd` パラメータで `app` を指定する
+- 起動後は返却された **terminalId を必ず控えて** ユーザーに報告する。ログ参照（`get_process_output`）と停止時にこの ID が必要
 
-### 3. 起動成功判定は「ログに起動シグナルが現れるまで」を待つ
+### 3. 起動成功判定は「HTTP 応答が返るまで」を待つ
 
-- 起動シグナルの例: `Server running at`, `Listening on`, `started`, `http://localhost:`
+- 判定は「`http://localhost:3000` が HTTP 応答を返すか」と「`get_process_output` のログに起動シグナル（`Server running at`, `Listening on`, `http://localhost:` 等）が出ているか」で行う
 - 待機は最大 30 秒。タイムアウトしたらログ末尾をユーザーに見せて停止する
 - 「コマンドを投げただけ」では起動完了と見なさない（プロセスがクラッシュしていても気付けない）
 
@@ -72,21 +73,22 @@ description: 「開発サーバ起動して」「サーバ立ち上げて」「�
 - 起動前に対象ポート (デフォルト 3000) が空いているか確認する。受講者PCの OS に応じてコマンドを使い分ける:
   - macOS: `lsof -i :3000`（無ければ `netstat -an | grep 3000`）
   - Windows (PowerShell): `Get-NetTCPConnection -LocalPort 3000`（無ければ `netstat -ano | findstr :3000`）
-- 既に誰かが使っていたら **占有プロセスを表示** して `AskUserQuestion` で確認:
+- 既に誰かが使っていたら **占有プロセスを表示** して、チャットで次の選択肢を提示し回答を待つ:
   - 「既存サーバを止めて起動し直す」
   - 「別ポートで起動する」
   - 「中止する」
 - **無確認で `kill` してはいけない**（ユーザーが意図的に動かしている別作業の可能性）
 
-### 5. 停止は task_id を使った TaskStop を最優先
+### 5. 停止は terminalId を使った `control_bash_process` の stop を最優先
 
-- このセッション内で起動したサーバは task_id が分かっているので、まず TaskStop で停止
-- task_id が不明（過去セッションの残骸など）の場合のみ、`lsof -i :3000` でプロセスを特定 → ユーザー確認の上で `kill`
+- このセッション内で起動したサーバは terminalId が分かっているので、まず `control_bash_process`（`action: "stop"`, `terminalId`）で停止
+- terminalId を見失った場合は `list_processes` で Kiro が管理中のプロセス一覧から `npm run dev` 系を探す
+- それでも見つからない（Kiro の管理外・過去セッションの残骸など）場合のみ、`lsof -i :3000` でプロセスを特定 → ユーザー確認の上で `kill`
 - 一括 `pkill -f tsx` のような **広い範囲の kill は使わない**（他作業を巻き込む）
 
 ### 6. 状態確認は破壊的操作を含めない
 
-- `lsof`, `ps`, ログ末尾参照のみ。プロセスを止めない
+- `lsof`, `ps`, `list_processes`, `get_process_output` のみ。プロセスを止めない
 
 ## 対話フロー
 
@@ -121,23 +123,26 @@ Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue; if (-not $?)
 # 上記が使えない場合: netstat -ano | findstr :3000
 ```
 
-占有されていたら、占有プロセスの情報（PID, COMMAND）を表示して `AskUserQuestion` で次のアクションを確認。
+占有されていたら、占有プロセスの情報（PID, COMMAND）を表示して、チャットで次のアクション（止めて起動し直す / 別ポート / 中止）を確認する。
 
 #### 1A-2. バックグラウンド起動
 
-プロジェクトルートから相対パスで実行する。`npm` は runtime 配下のものを使うため、PATH に runtime の bin を付与する（`app/` に入るので runtime は1つ上の階層）:
+`control_bash_process` を `action: "start"` で呼び、**`cwd` に `app` ディレクトリ（ワークスペース直下の `app`）を指定**する。`cd` やコマンド連結は使えないので、PATH 付与はコマンド先頭の環境変数指定で行う（`app/` から見て runtime は1つ上の階層）:
 
 ```bash
-# macOS / Linux
-cd app && PATH="$PWD/../runtime/node/bin:$PATH" npm run dev
+# macOS / Linux（command に指定する文字列。cwd = app）
+PATH="$PWD/../runtime/node/bin:$PATH" npm run dev
 ```
 
 ```powershell
 # Windows / PowerShell（npm ではなく npm.cmd。裸の npm は npm.ps1 に解決され ExecutionPolicy で落ちる）
-cd app; $env:Path = "$PWD\..\runtime\node;$env:Path"; npm.cmd run dev
+# control_bash_process は `;` 連結を受け付けないため、cmd.exe に1コマンドとして渡す（cwd = app）
+cmd.exe /d /c "set PATH=%CD%\..\runtime\node;%PATH%&& npm.cmd run dev"
 ```
 
-を `run_in_background: true` で起動。返却された `task_id` と `output` パスを控える。
+返却された **terminalId** を控える。
+
+> Windows で上記がツールに拒否された場合は、無理に別の書き方を試し続けず、ユーザーに「Kiro のターミナルを開いて次のコマンドを貼り付けて実行してください」と案内する（`cd app; $env:Path = "$PWD\..\runtime\node;$env:Path"; npm.cmd run dev`）。この場合、停止もユーザーのターミナルで `Ctrl+C` してもらう。
 
 > グローバルの node/npm は存在しない前提。必ず runtime 配下の npm を PATH 付与で使う（[AGENTS.md](../../../AGENTS.md) 参照）。パッケージマネージャの読み替え指示がある場合も、対象バイナリは runtime 配下のものを用いる。
 >
@@ -145,20 +150,24 @@ cd app; $env:Path = "$PWD\..\runtime\node;$env:Path"; npm.cmd run dev
 
 #### 1A-3. 起動ログ待機
 
-`sleep` を含むポーリングループは環境によってブロックされるため使わない。また **`timeout` コマンドは macOS に標準搭載されていない**（Windows の `timeout` も別物）ため使わない。代わりに、setup 済みなら必ず存在する **同梱 Node（`runtime/node`）のワンライナー** で「起動シグナルが出るまで最大30秒待つ」を1コマンドで実現する:
+Kiro のバックグラウンドプロセスはログをファイルに書き出さないため、ログファイルの監視はしない。代わりに次の2段で判定する。
 
-```bash
-# macOS / Linux（プロジェクトルートから実行）
-runtime/node/bin/node -e 'const fs=require("fs");const f=process.argv[1];const re=/(Server running|Listening on|http:\/\/localhost:)/;const t0=Date.now();(function poll(){let s="";try{s=fs.readFileSync(f,"utf8")}catch(e){}if(re.test(s)){console.log("STARTED");process.exit(0)}if(Date.now()-t0>30000){console.log("TIMEOUT");process.exit(1)}setTimeout(poll,500)})();' "<output_path>"
-```
+1. **HTTP 応答を待つ**: 通常のコマンド実行（`execute_bash`）で、setup 済みなら必ず存在する **同梱 Node（`runtime/node`）のワンライナー** を実行し、`http://localhost:3000` が応答するまで最大30秒待つ。`sleep` ループや `timeout` コマンド（macOS に標準搭載されておらず、Windows の `timeout` は別物）は使わない
 
-```powershell
-# Windows / PowerShell（プロジェクトルートから実行。スクリプト文字列は上と同一）
-runtime\node\node.exe -e 'const fs=require("fs");const f=process.argv[1];const re=/(Server running|Listening on|http:\/\/localhost:)/;const t0=Date.now();(function poll(){let s="";try{s=fs.readFileSync(f,"utf8")}catch(e){}if(re.test(s)){console.log("STARTED");process.exit(0)}if(Date.now()-t0>30000){console.log("TIMEOUT");process.exit(1)}setTimeout(poll,500)})();' "<output_path>"
-```
+   ```bash
+   # macOS / Linux（プロジェクトルートから実行）
+   runtime/node/bin/node -e 'const u=process.argv[1];const t0=Date.now();(async function poll(){try{const r=await fetch(u);console.log("STARTED (HTTP "+r.status+")");process.exit(0)}catch(e){}if(Date.now()-t0>30000){console.log("TIMEOUT");process.exit(1)}setTimeout(poll,500)})();' "http://localhost:3000"
+   ```
 
-- 0.5 秒ごとにログファイルを先頭から読み直して判定するので、待機開始前に出力済みのシグナルも取りこぼさない
-- `TIMEOUT` になったら出力ファイルの末尾 50 行（macOS: `tail -n 50 "<output_path>"` / Windows: `Get-Content "<output_path>" -Tail 50`）をユーザーに見せて、原因切り分けを促す（依存欠落 / 型エラー / ポート競合 等）
+   ```powershell
+   # Windows / PowerShell（プロジェクトルートから実行。スクリプト文字列は上と同一）
+   runtime\node\node.exe -e 'const u=process.argv[1];const t0=Date.now();(async function poll(){try{const r=await fetch(u);console.log("STARTED (HTTP "+r.status+")");process.exit(0)}catch(e){}if(Date.now()-t0>30000){console.log("TIMEOUT");process.exit(1)}setTimeout(poll,500)})();' "http://localhost:3000"
+   ```
+
+   - 0.5 秒ごとに接続を試し、HTTP 応答があれば（ステータスが 404 等でも）サーバは起動済みと判定する
+2. **ログを確認する**: `get_process_output`（`terminalId` を指定）で起動ログを取得し、エラーが出ていないか・ポート番号が想定どおりかを確認する
+
+- `TIMEOUT` になったら `get_process_output` でログ末尾（`lines: 50` 程度）をユーザーに見せて、原因切り分けを促す（依存欠落 / 型エラー / ポート競合 等）
 
 #### 1A-4. 結果報告
 
@@ -168,8 +177,7 @@ runtime\node\node.exe -e 'const fs=require("fs");const f=process.argv[1];const r
 ✅ 開発サーバを起動しました。
 
 - ブラウザで開く: http://localhost:3000
-- task_id: <id>（停止時に使います）
-- ログ: <output_path>
+- terminalId: <id>（停止・ログ確認に使います）
 
 停止したいときは「サーバ止めて」と伝えてください。
 ```
@@ -180,15 +188,17 @@ runtime\node\node.exe -e 'const fs=require("fs");const f=process.argv[1];const r
 
 #### 1B-1. 稼働中タスクの特定
 
-- セッション内で起動した task_id が分かっていればそれを優先
-- 不明な場合はポート占有プロセスを特定し（macOS: `lsof -i :3000` / Windows: `netstat -ano | findstr :3000`）、`AskUserQuestion` で「このプロセスを止めますか?」と確認
+- セッション内で起動した terminalId が分かっていればそれを優先
+- 分からなければ `list_processes` で Kiro が管理中のプロセスから `npm run dev` 系（`cwd` が `app`）を探す
+- それでも見つからない場合はポート占有プロセスを特定し（macOS: `lsof -i :3000` / Windows: `netstat -ano | findstr :3000`）、チャットで「このプロセスを止めますか?」と確認して回答を待つ
 
 #### 1B-2. 停止実行
 
-- セッション内タスクなら `TaskStop` ツールで停止
-- 過去セッションの残骸なら、ユーザー承認の上で対象PIDを停止する:
+- Kiro 管理下のプロセスなら `control_bash_process`（`action: "stop"`, `terminalId`）で停止
+- Kiro 管理外（過去セッションの残骸など）なら、ユーザー承認の上で対象PIDを停止する:
   - macOS: `kill <PID>`（`kill -9` は最終手段。まずは通常 `kill` で）
   - Windows: `Stop-Process -Id <PID>`（強制は `-Force`。または `taskkill /PID <PID> /F`）
+  - これらのコマンドは Kiro の権限設定で拒否されることがある。拒否されたら別の書き方で回避を試みず、コマンドを提示して「Kiro のターミナルに貼り付けて実行してください」とユーザーに依頼する
 
 #### 1B-3. 停止確認
 
@@ -231,8 +241,9 @@ netstat -ano | findstr :3000; if (-not $?) { "free" }
 ```
 
 ```
-# 2. セッション内で起動した task の状態（task_id が分かる場合）
-#    → 手元の記録から該当 task_id を参照
+# 2. Kiro が管理しているバックグラウンドプロセスの状態
+#    → list_processes で一覧を取得（terminalId / command / cwd / status）
+#    → 該当プロセスがあれば get_process_output で直近ログも確認
 ```
 
 報告例:
@@ -241,7 +252,7 @@ netstat -ano | findstr :3000; if (-not $?) { "free" }
 📡 現在の状態
 
 - ポート 3000: 使用中 (PID 12345, COMMAND: node)
-- このセッションで起動した dev サーバ: あり (task_id: ...)
+- Kiro で起動した dev サーバ: あり (terminalId: ..., status: running)
 - ブラウザで開く: http://localhost:3000
 ```
 
@@ -261,7 +272,8 @@ netstat -ano | findstr :3000; if (-not $?) { "free" }
 - ポート 3000 が占有されているときに **無確認で `kill`** すること
 - `pkill -f tsx` / `pkill -f node`（Windows なら `taskkill /IM node.exe /F` / `Stop-Process -Name node`）のような **広範囲な kill** で巻き添え停止すること
 - `package.json` を **無視して直接 `tsx` 等を呼び出す** こと（スクリプトを介すことで設定の一貫性を保つ）
-- セッションをまたいで残った task_id を当て推量で TaskStop すること（無効な ID で空振る）
+- terminalId を当て推量で stop すること（必ず `list_processes` で実在を確認してから）
+- `kill` 等が権限設定で拒否されたときに、書き方を変えて回避を試みること（ユーザーに手動実行を依頼する）
 - 停止後にポートが解放されたか **確認せず完了報告** すること
 - 専門用語をそのまま投げて初学者を置いていくこと
 
@@ -270,4 +282,4 @@ netstat -ano | findstr :3000; if (-not $?) { "free" }
 - 「開発サーバは『下書き専用のお店』のようなもので、コードを書き換えるとすぐ反映されます」
 - 「バックグラウンド起動なので、画面には見えませんが裏で動いています。お使いのPCのブラウザで http://localhost:3000 を開けば触れます」
 - 「止め忘れるとポートを掴んだままになり、次に同じサーバを起動するときに『すでに使われている』と怒られます。終わったら止める癖をつけると安心です」
-- 「`Ctrl+C` でも止められますが、バックグラウンド起動の場合は『サーバ止めて』と伝えてもらえれば task_id 経由で確実に止めます」
+- 「`Ctrl+C` でも止められますが、バックグラウンド起動の場合は『サーバ止めて』と伝えてもらえれば Kiro が管理している ID 経由で確実に止めます」
